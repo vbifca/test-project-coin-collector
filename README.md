@@ -25,22 +25,28 @@
 
 Вариант с тремя экранами: загрузка → меню → игра.
 
-```mermaid
-flowchart TD
-    A[Стартовый экран загрузки\n(логотип/текст, короткая задержка)] --> B[Экран меню\nКнопки: Играть, Выход]
-    B -->|Играть| C[Игровая сцена\nПерсонаж + Противники + UI]
-    C -->|Победа/Поражение| B
-    B -->|Выход| D[Завершение приложения]
-```
+Main.tscn
+└── CanvasLayer (Loader)
+└── Label (текст «Загрузка…»)
 
-Мини-структура проектов:
 
-```
-Main.tscn        # стартовая сцена (Loader)
-MainMenu.tscn    # меню
-Game.tscn        # игровая сцена (мир, игрок, враги, UI)
-```
+MainMenu.tscn
+└── Control (основа интерфейса)
+├── Label (заголовок)
+├── Button (Играть)
+└── Button (Выход)
 
+
+Game.tscn
+└── Node2D (GameRoot)
+├── TileMap (Карта)
+├── Player (CharacterBody2D)
+│ └── AnimatedSprite2D
+├── Enemies (Node2D)
+│ └── Enemy (CharacterBody2D)
+│ └── AnimatedSprite2D
+└── UI (CanvasLayer)
+└── Label (Счётчик монет)
 ---
 
 ## Вопрос 2. Как работают сигналы (Signals) в Godot?
