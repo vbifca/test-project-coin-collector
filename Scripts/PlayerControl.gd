@@ -9,17 +9,18 @@ signal game_over()
 # Конфиг
 @export var config_path: String = "res://Config/config.json"
 
-# Враг-группа (может переопределяться конфигом)
+# Группа врагов (может переопределяться конфигом)
 var _enemy_group := "Enemy"
 
-# --- JUMP / DASH ---
+# --- Параметры JUMP / DASH ---
 @export_group("Jump")
-@export var world_path: NodePath = "/root/Node2D/World"
-@export_range(1, 6, 1) var jump_tiles: int = 3            # на сколько клеток перелет
+@export var world_path: NodePath = "/root/Node2D/World"   # узел мира, от которого ждём методы поиска/проверки клеток
+@export_range(1, 6, 1) var jump_tiles: int = 3            # сколько клеток максимум «перелетаем» вперёд
 @export_range(0.05, 1.0, 0.01) var jump_duration: float = 0.4
 @export_range(0.1, 3.0, 0.05) var jump_cooldown: float = 0.6
-@export var allow_diagonals_in_jump: bool = true          # можно ли прыгать по диагонали
+@export var allow_diagonals_in_jump: bool = true          # можно ли прыгать по диагонали (для изометрии часто нужно)
 
+# Внутреннее состояние прыжка
 var _is_jumping := false
 var _jump_from: Vector2
 var _jump_to: Vector2
@@ -27,40 +28,46 @@ var _jump_t := 0.0
 var _jump_cd_timer := 0.0
 var _pre_jump_collision_mask: int = 0
 
-# запоминаем последний направляющий вектор, чтобы прыгать из стоячего состояния
+# Последнее направление ввода — чтобы можно было прыгнуть «с места»
 var _last_dir := Vector2.DOWN
 
 @onready var _sprite: AnimatedSprite2D = _resolve_sprite()
 @onready var _has_anim: Dictionary = _build_anim_map()
 @onready var _world: Node = get_node(world_path) if world_path != NodePath() else null
 
-
+# Имена анимаций по секторам (по часам, шаг 45°)
 const _DIR_NAMES: PackedStringArray = [
 	"right", "up_right", "up", "up_left", "left", "down_left", "down", "down_right"
 ]
 
 func _ready() -> void:
+	# Подтягиваем конфиг (может поменять скорость, deadzone, пути к спрайту и т.д.)
 	_load_config()
+	# Если конфиг поменял world_path — актуализируем ссылку на мир
+	if world_path != NodePath():
+		_world = get_node_or_null(world_path)
 
 func _physics_process(dt: float) -> void:
-	# охлаждение прыжка
+	# Кулдаун прыжка
 	if _jump_cd_timer > 0.0:
 		_jump_cd_timer = maxf(0.0, _jump_cd_timer - dt)
 
+	# Если уже в прыжке — интерполируем позицию и выходим
 	if _is_jumping:
 		_process_jump(dt)
 		return
 
+	# Читаем ввод осей
 	var input_vec := _read_input()
 	if input_vec.length() >= input_deadzone:
 		_last_dir = input_vec.normalized()
 
-	# старт прыжка по кнопке
+	# Старт прыжка по кнопке
 	if Input.is_action_just_pressed("jump") and not _is_jumping and _jump_cd_timer <= 0.0:
 		if _try_start_jump():
-			return # если смогли начать прыжок — управление движением не выполняем
+			return # прыжок перехватывает управление движением
 
-	# обычное движение
+	# Обычное перемещение
 	if input_vec.length() < input_deadzone:
 		velocity = Vector2.ZERO
 		_play_idle()
@@ -71,6 +78,7 @@ func _physics_process(dt: float) -> void:
 
 	move_and_slide()
 
+# Суммируем оси (WASD/стрелки/аналог)
 func _read_input() -> Vector2:
 	var x := Input.get_action_strength("right") - Input.get_action_strength("left")
 	var y := Input.get_action_strength("down")  - Input.get_action_strength("up")
@@ -79,21 +87,23 @@ func _read_input() -> Vector2:
 # -------------------- JUMP CORE --------------------
 
 func _try_start_jump() -> bool:
+	# Направление прыжка — из последнего валидного ввода
 	var dir: Vector2 = _choose_jump_dir(_last_dir)
 	if dir == Vector2.ZERO:
 		print("Jump cancelled: no direction")
 		return false
 
-	if not _world:
+	# Нужен валидный мир и его API (координатная сетка + проверка проходимости)
+	if _world == null:
 		print("Jump cancelled: no world assigned")
 		return false
-
 	if not (_world.has_method("world_to_cell") and _world.has_method("cell_to_world_center") and _world.has_method("is_cell_walkable")):
 		print("Jump cancelled: world missing required methods")
 		return false
 
+	# Переводим позицию в координаты клетки
 	var start_cell: Vector2i = _world.world_to_cell(global_position)
-	var step: Vector2i = _dir_to_cell_step(dir)
+	var step: Vector2i = _dir_to_cell_step(dir) # шаг по клеткам для одного «тика» прыжка
 	if step == Vector2i.ZERO:
 		print("Jump cancelled: invalid step direction")
 		return false
@@ -102,10 +112,11 @@ func _try_start_jump() -> bool:
 	var landing_cell: Vector2i = start_cell
 	var found_ground: bool = false
 
+	# Проходим клетки по направлению прыжка, пока не встретим сушу (walkable && !water)
 	for i in jump_tiles:
 		current += step
 
-		# если есть метод проверки границ — проверяем
+		# Если мир умеет проверять границы — используем
 		if _world.has_method("is_in_bounds") and not _world.is_in_bounds(current):
 			print("Jump cancelled: out of bounds at ", current)
 			return false
@@ -113,14 +124,12 @@ func _try_start_jump() -> bool:
 		var walkable: bool = bool(_world.is_cell_walkable(current))
 		var water: bool = _world.has_method("is_cell_water") and bool(_world.is_cell_water(current))
 
-		print("Check cell:", current, " walkable=", walkable, " water=", water)
-
-		# если это стена (непроходимое и не вода) → стоп
+		# стена → прыжок запрещаем сразу
 		if not walkable and not water:
 			print("Jump cancelled: wall at ", current)
 			return false
 
-		# если это суша (проходимо и не вода) → назначаем точку приземления
+		# первая найденная суша — будущая точка приземления
 		if walkable and not water:
 			landing_cell = current
 			found_ground = true
@@ -138,9 +147,11 @@ func _try_start_jump() -> bool:
 	_is_jumping = true
 	velocity = Vector2.ZERO
 
+	# На время прыжка отключаем маску столкновений, чтобы «пролетать» триггеры/стены
 	_pre_jump_collision_mask = collision_mask
 	collision_mask = 0
 
+	# Анимация «jump», если есть; иначе — направление бега до точки
 	if _has_anim.get("jump", false):
 		_sprite.play("jump")
 	else:
@@ -149,22 +160,24 @@ func _try_start_jump() -> bool:
 	print("Jump started from", _jump_from, "to", _jump_to)
 	return true
 
+# Интерполяция прыжка во времени
 func _process_jump(dt: float) -> void:
 	_jump_t += dt / jump_duration
 	var t := float(clamp(_jump_t, 0.0, 1.0))
-	# лёгкая ease-in-out, плюс «псевдо-дуга» через смещение по Y для красоты (опционально)
-	var eased := _ease_in_out_quad(t)
+	var eased := _ease_in_out_quad(t) # небольшое сглаживание
 	global_position = _jump_from.lerp(_jump_to, eased)
 
 	if t >= 1.0:
 		_finish_jump()
 
+# Завершение прыжка: возвращаем маску, вешаем кд, уходим в idle
 func _finish_jump() -> void:
 	_is_jumping = false
 	collision_mask = _pre_jump_collision_mask
 	_jump_cd_timer = jump_cooldown
 	_play_idle()
 
+# Нормализация и запрет диагоналей (если выключены)
 func _choose_jump_dir(dir: Vector2) -> Vector2:
 	if dir.length() < 0.001:
 		return Vector2.ZERO
@@ -176,11 +189,14 @@ func _choose_jump_dir(dir: Vector2) -> Vector2:
 		0.0 if absf(dir.x) >= absf(dir.y) else signf(dir.y)
 	)
 
+# Маппинг «направление → шаг по клеткам» для изометрической сетки
+# Примечание: значения (0,2), (1,2) и т.п. подобраны под вашу world_to_cell;
+# если шаг "вниз" уходит по диагонали — корректируйте здесь под свою геометрию TileMap.
 func _dir_to_cell_step(dir: Vector2) -> Vector2i:
 	if dir == Vector2.ZERO:
 		return Vector2i.ZERO
 
-	# Обрезаем мелкие шумы
+	# Обрезаем мелкие шумы стика, чтобы «вниз» не превращался в «вниз-вправо»
 	var dx := 0
 	var dy := 0
 	if absf(dir.x) > 0.3:
@@ -189,7 +205,6 @@ func _dir_to_cell_step(dir: Vector2) -> Vector2i:
 		dy = 1 if dir.y > 0 else -1
 
 	var step := Vector2i.ZERO
-
 	if dx == 0 and dy > 0:       # вниз
 		step = Vector2i(0, 2)
 	elif dx == 0 and dy < 0:     # вверх
@@ -209,7 +224,7 @@ func _dir_to_cell_step(dir: Vector2) -> Vector2i:
 
 	return step
 
-
+# Плавная ease in/out-кривая
 func _ease_in_out_quad(x: float) -> float:
 	return 2.0 * x * x if x < 0.5 else 1.0 - pow(-2.0 * x + 2.0, 2.0) * 0.5
 
@@ -220,6 +235,7 @@ func _play_move(v: Vector2) -> void:
 	_play_anim(dir_name)
 
 func _play_idle() -> void:
+	# «idle_<последнее_направление>», если есть; иначе просто стоп
 	var current: String = _sprite.animation
 	var base_dir: String = _extract_dir_from_name(current)
 	var idle_name: String = ("idle_" + base_dir) if base_dir != "" else "idle_down"
@@ -230,12 +246,14 @@ func _play_idle() -> void:
 	else:
 		_sprite.stop()
 
+# Выбор именованного сектора по вектору скорости
 func _vector_to_dir_name(v: Vector2) -> String:
 	var angle := atan2(-v.y, v.x)
 	var sector := int(roundi(angle / (PI / 4.0)))
 	sector = posmod(sector, 8)
 	return _DIR_NAMES[sector]
 
+# Воспроизведение нужной анимации с фолбэком
 func _play_anim(dir_name: String) -> void:
 	var has_anim: bool = bool(_has_anim.get(dir_name, false))
 	if has_anim:
@@ -265,6 +283,7 @@ func _fallback_dir(dir_name: String) -> String:
 		_:
 			return ""
 
+# Достаём «направление» из имени текущей анимации (для idle-логики)
 func _extract_dir_from_name(anim_name: String) -> String:
 	if anim_name == "":
 		return ""
@@ -279,11 +298,13 @@ func _extract_dir_from_name(anim_name: String) -> String:
 		res += "_" + parts[i]
 	return res
 
+# Разрешение узла-спрайта (из поля или по умолчанию — дочерний $AnimatedSprite2D)
 func _resolve_sprite() -> AnimatedSprite2D:
 	if sprite_path != NodePath():
 		return get_node(sprite_path) as AnimatedSprite2D
 	return $AnimatedSprite2D
 
+# Кэш наличия анимаций: { "run_right": true, ... }
 func _build_anim_map() -> Dictionary:
 	var map := {}
 	var frames := _sprite.sprite_frames
@@ -306,7 +327,7 @@ func _load_config() -> void:
 	_apply_config(parsed as Dictionary)
 
 func _apply_config(cfg: Dictionary) -> void:
-	# player.speed, player.input_deadzone, player.sprite_path, gameplay.enemy_group
+	# player.speed, player.input_deadzone, player.sprite_path, jump_*, gameplay.enemy_group
 	if cfg.has("player") and typeof(cfg.player) == TYPE_DICTIONARY:
 		var p: Dictionary = cfg.player
 		if p.has("speed"):
@@ -332,14 +353,19 @@ func _apply_config(cfg: Dictionary) -> void:
 			_enemy_group = String(g.enemy_group)
 
 # -------------------- Столкновения --------------------
+# Важно: убедись, что сигнал Area2D.area_entered подключён к этому методу (через редактор или кодом).
 
 func _on_area_2d_area_entered(area: Area2D) -> void:
+	# Если сам Area2D помечен как Enemy — сразу Гейм-овер
 	if area.is_in_group(_enemy_group):
 		_game_over()
-	else:
-		var p := area.get_parent()
-		if p and p.is_in_group(_enemy_group):
-			_game_over()
+		return
+	# Либо его родитель — враг (коллайдер/триггер — дочерний)
+	var p := area.get_parent()
+	if p and is_instance_valid(p) and p.is_in_group(_enemy_group):
+		_game_over()
 
 func _game_over() -> void:
+	# Только сигналим — удаление / смена сцен делать извне (из GameController),
+	# чтобы избежать ошибок «удаление в физическом коллбэке».
 	emit_signal("game_over")
