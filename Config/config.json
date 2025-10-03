@@ -1,0 +1,47 @@
+{
+  "player": {
+	"speed": 200.0,
+	"input_deadzone": 0.12,
+	"sprite_path": "../Player/AnimatedSprite2D"
+  },
+  "gameplay": {
+	"enemy_group": "Enemy"
+  },
+	"spawner": {
+		"coins_count": 30,
+		"enemies_count": 8,
+		"allow_diagonals": true,
+		"spawn_area": { "x": 0, "y": 0, "w": 1024, "h": 1024 },
+		"tile_size": { "x": 32, "y": 16 }
+		},
+	"enemies": {
+		"wanderer": {
+		  "world_path": "../World",
+		  "target_path": "../Player",
+		  "allow_diagonals": true,
+
+		  "wander_radius": 800.0,
+		  "repath_interval": 1.2,
+		  "random_goal_attempts": 24,
+		  "goal_reached_distance": 16.0,
+
+		  "idle_time_min": 0.3,
+		  "idle_time_max": 1.0,
+
+		  "speed": 40.0,
+		  "sprite_path": "../EnemySprite"
+		},
+		"chaser": {
+		  "world_path": "../World",
+		  "target_path": "../Player",
+		  "allow_diagonals": true,
+
+		  "chase_start_distance": 320.0,
+		  "chase_stop_distance": 560.0,
+		  "chase_repath_interval": 0.3,
+
+		  "speed": 50.0,
+		  "sprite_path": "../EnemyChaser/Sprite"
+		}
+  }
+}
